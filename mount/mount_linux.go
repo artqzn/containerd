@@ -28,6 +28,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type mountOpt struct {
+	flags   int
+	data    string
+	losetup bool
+	mapuid  string
+	mapgid  string
+}
+
 var (
 	pagesize              = 4096
 	allowedHelperBinaries = []string{"mount.fuse", "mount.fuse3"}
@@ -61,8 +69,8 @@ func (m *Mount) Mount(target string) (err error) {
 		chdir, options = compactLowerdirOption(options)
 	}
 
-	flags, data, losetup := parseMountOptions(options)
-	if len(data) > pagesize {
+	opt := parseMountOptions(options)
+	if len(opt.data) > pagesize {
 		return errors.New("mount options is too long")
 	}
 
@@ -70,14 +78,14 @@ func (m *Mount) Mount(target string) (err error) {
 	const ptypes = unix.MS_SHARED | unix.MS_PRIVATE | unix.MS_SLAVE | unix.MS_UNBINDABLE
 
 	// Ensure propagation type change flags aren't included in other calls.
-	oflags := flags &^ ptypes
+	oflags := opt.flags &^ ptypes
 
 	// In the case of remounting with changed data (data != ""), need to call mount (moby/moby#34077).
-	if flags&unix.MS_REMOUNT == 0 || data != "" {
+	if opt.flags&unix.MS_REMOUNT == 0 || opt.data != "" {
 		// Initial call applying all non-propagation flags for mount
 		// or remount with changed data
 		source := m.Source
-		if losetup {
+		if opt.losetup {
 			loFile, err := setupLoop(m.Source, LoopParams{
 				Readonly:  oflags&unix.MS_RDONLY == unix.MS_RDONLY,
 				Autoclear: true})
@@ -89,15 +97,15 @@ func (m *Mount) Mount(target string) (err error) {
 			// Mount the loop device instead
 			source = loFile.Name()
 		}
-		if err := mountAt(chdir, source, target, m.Type, uintptr(oflags), data); err != nil {
+		if err := mountAt(chdir, source, target, m.Type, uintptr(oflags), opt.data); err != nil {
 			return err
 		}
 	}
 
-	if flags&ptypes != 0 {
+	if opt.flags&ptypes != 0 {
 		// Change the propagation type.
 		const pflags = ptypes | unix.MS_REC | unix.MS_SILENT
-		if err := unix.Mount("", target, "", uintptr(flags&pflags), ""); err != nil {
+		if err := unix.Mount("", target, "", uintptr(opt.flags&pflags), ""); err != nil {
 			return err
 		}
 	}
@@ -107,6 +115,17 @@ func (m *Mount) Mount(target string) (err error) {
 		// Remount the bind to apply read only.
 		return unix.Mount("", target, "", uintptr(oflags|unix.MS_REMOUNT), "")
 	}
+
+	// The only remapping of both GID and UID is supported
+	if opt.mapuid != "" && opt.mapgid != "" {
+		// Remap GID UID of container rootfs from host to container
+		// to have proper ownership of rootfs files in container
+		// user namespace
+		if err := MapMount(opt.mapuid, opt.mapgid, target); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -198,14 +217,11 @@ func UnmountAll(mount string, flags int) error {
 
 // parseMountOptions takes fstab style mount options and parses them for
 // use with a standard mount() syscall
-func parseMountOptions(options []string) (int, string, bool) {
-	var (
-		flag    int
-		losetup bool
-		data    []string
-	)
+func parseMountOptions(options []string) (opt mountOpt) {
+	var data []string
+
 	loopOpt := "loop"
-	flags := map[string]struct {
+	flagsMap := map[string]struct {
 		clear bool
 		flag  int
 	}{
@@ -239,19 +255,24 @@ func parseMountOptions(options []string) (int, string, bool) {
 		// If the option does not exist in the flags table or the flag
 		// is not supported on the platform,
 		// then it is a data value for a specific fs type
-		if f, exists := flags[o]; exists && f.flag != 0 {
+		if f, exists := flagsMap[o]; exists && f.flag != 0 {
 			if f.clear {
-				flag &^= f.flag
+				opt.flags &^= f.flag
 			} else {
-				flag |= f.flag
+				opt.flags |= f.flag
 			}
 		} else if o == loopOpt {
-			losetup = true
+			opt.losetup = true
+		} else if strings.HasPrefix(o, "mapuid=") {
+			opt.mapuid = strings.TrimPrefix(o, "mapuid=")
+		} else if strings.HasPrefix(o, "mapgid=") {
+			opt.mapgid = strings.TrimPrefix(o, "mapgid=")
 		} else {
 			data = append(data, o)
 		}
 	}
-	return flag, strings.Join(data, ","), losetup
+	opt.data = strings.Join(data, ",")
+	return
 }
 
 // compactLowerdirOption updates overlay lowdir option and returns the common
