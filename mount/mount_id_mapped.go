@@ -27,7 +27,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -35,19 +34,19 @@ import (
 func parseIDMapping(mapping string) ([]syscall.SysProcIDMap, error) {
 	parts := strings.Split(mapping, ":")
 	if len(parts) != 3 {
-		return []syscall.SysProcIDMap{}, errors.New("user namespace mappings require the format `container-id:host-id:size`")
+		return []syscall.SysProcIDMap{}, fmt.Errorf("user namespace mappings require the format `container-id:host-id:size`")
 	}
 	cID, err := strconv.ParseUint(parts[0], 0, 32)
 	if err != nil {
-		return []syscall.SysProcIDMap{}, errors.Wrapf(err, "invalid container id for user namespace remapping")
+		return []syscall.SysProcIDMap{}, fmt.Errorf("invalid container id for user namespace remapping, %w", err)
 	}
 	hID, err := strconv.ParseUint(parts[1], 0, 32)
 	if err != nil {
-		return []syscall.SysProcIDMap{}, errors.Wrapf(err, "invalid host id for user namespace remapping")
+		return []syscall.SysProcIDMap{}, fmt.Errorf("invalid host id for user namespace remapping, %w", err)
 	}
 	size, err := strconv.ParseUint(parts[2], 0, 32)
 	if err != nil {
-		return []syscall.SysProcIDMap{}, errors.Wrapf(err, "invalid size for user namespace remapping")
+		return []syscall.SysProcIDMap{}, fmt.Errorf("invalid size for user namespace remapping, %w", err)
 	}
 
 	return []syscall.SysProcIDMap{
@@ -69,7 +68,7 @@ func mountIDMapped(target string, pid int) (err error) {
 
 	path = fmt.Sprintf("/proc/%d/ns/user", pid)
 	if userNsFile, err = os.Open(path); err != nil {
-		return errors.Wrapf(err, "Unable to get user ns file descriptor for - %s", path)
+		return fmt.Errorf("Unable to get user ns file descriptor for - %s, %w", path, err)
 	}
 
 	attr.Attr_set = unix.MOUNT_ATTR_IDMAP
@@ -79,7 +78,7 @@ func mountIDMapped(target string, pid int) (err error) {
 
 	defer userNsFile.Close()
 	if targetDir, err = os.Open(target); err != nil {
-		return errors.Wrapf(err, "Unable to get mount point target file descriptor - %s", target)
+		return fmt.Errorf("Unable to get mount point target file descriptor - %s, %w", target, err)
 	}
 
 	defer targetDir.Close()
@@ -114,16 +113,16 @@ func MapMount(uidmap string, gidmap string, target string) (err error) {
 	}
 
 	if err = cmd.Start(); err != nil {
-		return errors.Wrapf(err, "Failed to run the %s helper binary", userNsHelperBinary)
+		return fmt.Errorf("Failed to run the %s helper binary, %w", userNsHelperBinary, err)
 	}
 
 	defer func() {
-		if waitErr := cmd.Wait(); waitErr != nil {
-			err = errors.Wrapf(waitErr, "Failed to run the %s helper binary", userNsHelperBinary)
+		if err = cmd.Wait(); err != nil {
+			err = fmt.Errorf("Failed to run the %s helper binary, %w", userNsHelperBinary, err)
 		}
 	}()
 	if err = mountIDMapped(target, cmd.Process.Pid); err != nil {
-		return errors.Wrapf(err, "Failed to create idmapped mount for target - %s", target)
+		return fmt.Errorf("Failed to create idmapped mount for target - %s, %w", target, err)
 	}
 
 	return nil

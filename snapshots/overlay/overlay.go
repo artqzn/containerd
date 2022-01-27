@@ -239,7 +239,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 	}
 	_, info, _, err := storage.GetInfo(ctx, key)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get snapshot info")
+		return nil, fmt.Errorf("failed to get snapshot info: %w", err)
 	}
 	t.Rollback()
 
@@ -473,7 +473,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 	_, info, _, err := storage.GetInfo(ctx, key)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get snapshot info")
+		return nil, fmt.Errorf("failed to get snapshot info: %w", err)
 	}
 
 	rollback = false
